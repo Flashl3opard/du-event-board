@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://data-umbrella.github.io/du-event-board/event-schema.json",
+  "title": "DU Event Board Data",
+  "type": "object",
+  "required": ["events"],
+  "additionalProperties": false,
+  "properties": {
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    }
+  },
+  "$defs": {
+    "isoDate": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "event": {
+      "type": "object",
+      "required": ["id", "title", "description", "time", "location", "category"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": ["string", "number"] },
+        "title": { "type": "string", "minLength": 3 },
+        "description": { "type": "string", "minLength": 10 },
+        "time": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        "location": { "type": "string", "minLength": 2 },
+        "category": { "type": "string", "minLength": 2 },
+        "url": { "type": "string", "format": "uri" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+
+        "date": { "$ref": "#/$defs/isoDate" },
+        "region": { "type": "string", "minLength": 1 },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+
+        "event_type": { "type": "string", "enum": ["online", "in-person", "hybrid"] },
+        "cost": { "type": "string", "enum": ["free", "paid"] },
+        "start_date": { "$ref": "#/$defs/isoDate" },
+        "end_date": { "$ref": "#/$defs/isoDate" },
+        "country": { "type": "string", "minLength": 2 },
+        "state_province": { "type": "string", "minLength": 1 },
+        "hashtags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "organization_logo": {
+          "type": "string",
+          "anyOf": [{ "format": "uri" }, { "maxLength": 0 }]
+        },
+        "featured": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            { "required": ["start_date"] },
+            { "required": ["date"] }
+          ]
+        },
+        {
+          "anyOf": [
+            { "required": ["state_province"] },
+            { "required": ["region"] }
+          ]
+        },
+        {
+          "anyOf": [
+            { "required": ["hashtags"] },
+            { "required": ["tags"] }
+          ]
+        }
+      ]
+    }
+  }
+}

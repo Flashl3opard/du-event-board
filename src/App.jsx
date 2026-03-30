@@ -1,43 +1,90 @@
-import { useState, useMemo, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Header from "./components/Header";
 import SearchBar from "./components/SearchBar";
 import EventCard from "./components/EventCard";
 import EventMap from "./components/EventMap";
+import EventCalendar from "./components/EventCalendar";
+import FeaturedEvents from "./components/FeaturedEvents";
 import Footer from "./components/Footer";
-import events from "./data/events.json";
+import rawEvents from "./data/events.json";
 import { useUrlState } from "./hooks/useUrlState";
 
-function parseISODate(dateString) {
-  if (!dateString) return null;
-  const [year, month, day] = dateString.split("-").map(Number);
+function normalizeHashtag(value) {
+  return String(value).trim().replace(/^#+/, "").toLowerCase();
+}
+
+function normalizeEvent(event) {
+  const locationText = String(event.location ?? "").toLowerCase();
+  const inferredType =
+    locationText === "online" || locationText.includes("virtual")
+      ? "online"
+      : "in-person";
+
+  const startDate = event.start_date ?? event.date ?? "";
+  const endDate = event.end_date ?? startDate;
+  const hashtags = (event.hashtags ?? event.tags ?? [])
+    .map(normalizeHashtag)
+    .filter(Boolean);
+  const stateOrProvince = event.state_province ?? event.region ?? "Unspecified";
+
+  return {
+    ...event,
+    event_type: event.event_type ?? inferredType,
+    cost: event.cost ?? "free",
+    start_date: startDate,
+    end_date: endDate,
+    country: event.country ?? (inferredType === "online" ? "Global" : "Unknown"),
+    state_province: stateOrProvince,
+    hashtags,
+    organization_logo: event.organization_logo ?? "",
+    featured: Boolean(event.featured),
+
+    // Compatibility aliases for existing components.
+    date: event.date ?? startDate,
+    region: event.region ?? stateOrProvince,
+    tags: event.tags ?? hashtags,
+  };
+}
+
+function asDate(isoDate) {
+  if (!isoDate) return null;
+  const [year, month, day] = String(isoDate)
+    .split("-")
+    .map(Number);
   if (!year || !month || !day) return null;
   return new Date(year, month - 1, day);
 }
 
-function startOfDay(date) {
-  const normalized = new Date(date);
-  normalized.setHours(0, 0, 0, 0);
-  return normalized;
+function inRange(event, rangeStart, rangeEnd) {
+  const start = asDate(event.start_date);
+  const end = asDate(event.end_date) ?? start;
+  const filterStart = asDate(rangeStart);
+  const filterEnd = asDate(rangeEnd);
+
+  if (!start || !end) return false;
+
+  if (filterStart && end < filterStart) return false;
+  if (filterEnd && start > filterEnd) return false;
+  return true;
 }
 
 export default function App() {
   const [searchTerm, setSearchTerm] = useUrlState("search", "");
-  const [selectedRegion, setSelectedRegion] = useUrlState("region", "");
-  const [selectedCategory, setSelectedCategory] = useUrlState("category", "");
-  const [currentPage, setCurrentPage] = useUrlState("page", "events");
-  const [viewMode, setViewMode] = useUrlState("view", "list");
-
-  const [dateFilterType, setDateFilterType] = useUrlState("dateType", "all");
-  const [customDate, setCustomDate] = useUrlState("customDate", "");
+  const [selectedCountry, setSelectedCountry] = useUrlState("country", "");
+  const [selectedState, setSelectedState] = useUrlState("state", "");
+  const [selectedEventType, setSelectedEventType] = useUrlState("type", "");
+  const [selectedCost, setSelectedCost] = useUrlState("cost", "");
+  const [selectedHashtag, setSelectedHashtag] = useUrlState("hashtag", "");
   const [rangeStart, setRangeStart] = useUrlState("rangeStart", "");
   const [rangeEnd, setRangeEnd] = useUrlState("rangeEnd", "");
+  const [viewMode, setViewMode] = useUrlState("view", "list");
+  const [currentPage, setCurrentPage] = useUrlState("page", "events");
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [currentPage]);
 
   const [theme, setTheme] = useState(() => {
-    // Check if we are in a browser and if localStorage.getItem actually exists
     if (
       typeof window !== "undefined" &&
       window.localStorage &&
@@ -55,125 +102,73 @@ export default function App() {
       document.body.classList.remove("light-theme");
     }
 
-    // This line "records" the choice in the browser
     if (typeof localStorage !== "undefined" && localStorage.setItem) {
       localStorage.setItem("theme", theme);
     }
   }, [theme]);
 
-  const toggleTheme = () =>
+  const toggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
-
-  const handleDateFilterTypeChange = (nextType) => {
-    setDateFilterType(nextType);
-
-    if (nextType !== "customDate") {
-      setCustomDate("");
-    }
-
-    if (nextType !== "customRange") {
-      setRangeStart("");
-      setRangeEnd("");
-    }
   };
 
-  const regions = useMemo(() => {
-    const unique = [...new Set(events.map((e) => e.region))];
-    return unique.sort();
-  }, []);
+  const events = useMemo(() => rawEvents.map(normalizeEvent), []);
 
-  const categories = useMemo(() => {
-    const unique = [...new Set(events.map((e) => e.category))];
-    return unique.sort();
-  }, []);
+  const countries = useMemo(() => {
+    return [...new Set(events.map((event) => event.country))].sort();
+  }, [events]);
+
+  const states = useMemo(() => {
+    const filteredByCountry = selectedCountry
+      ? events.filter((event) => event.country === selectedCountry)
+      : events;
+
+    return [...new Set(filteredByCountry.map((event) => event.state_province))].sort();
+  }, [events, selectedCountry]);
+
+  const hashtags = useMemo(() => {
+    return [...new Set(events.flatMap((event) => event.hashtags))].sort();
+  }, [events]);
 
   const filteredEvents = useMemo(() => {
-    const term = searchTerm.toLowerCase().trim();
+    const term = searchTerm.trim().toLowerCase();
 
-    const today = startOfDay(new Date());
-
-    const weekStart = new Date(today);
-    const dayIndex = (today.getDay() + 6) % 7;
-    weekStart.setDate(today.getDate() - dayIndex);
-
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-    monthEnd.setHours(0, 0, 0, 0);
-
-    const selectedCustomDate = parseISODate(customDate);
-    const selectedRangeStart = parseISODate(rangeStart);
-    const selectedRangeEnd = parseISODate(rangeEnd);
+    if (rangeStart && rangeEnd && rangeStart > rangeEnd) {
+      return [];
+    }
 
     return events.filter((event) => {
-      const eventDate = parseISODate(event.date);
-      if (!eventDate) return false;
-
-      // Text search: title, description, tags
       const matchesSearch =
         !term ||
         event.title.toLowerCase().includes(term) ||
         event.description.toLowerCase().includes(term) ||
-        (event.tags &&
-          event.tags.some((tag) => tag.toLowerCase().includes(term)));
+        event.hashtags.some((tag) => tag.includes(term)) ||
+        event.tags.some((tag) => String(tag).toLowerCase().includes(term));
 
-      // Region filter
-      const matchesRegion = !selectedRegion || event.region === selectedRegion;
+      const matchesCountry = !selectedCountry || event.country === selectedCountry;
+      const matchesState = !selectedState || event.state_province === selectedState;
+      const matchesType = !selectedEventType || event.event_type === selectedEventType;
+      const matchesCost = !selectedCost || event.cost === selectedCost;
+      const matchesHashtag = !selectedHashtag || event.hashtags.includes(selectedHashtag);
+      const matchesDateRange = inRange(event, rangeStart, rangeEnd);
 
-      // Category filter
-      const matchesCategory =
-        !selectedCategory || event.category === selectedCategory;
-
-      // Date filter
-      let matchesDate = true;
-
-      switch (dateFilterType) {
-        case "upcoming":
-          matchesDate = eventDate >= today;
-          break;
-        case "thisWeek":
-          matchesDate = eventDate >= weekStart && eventDate <= weekEnd;
-          break;
-        case "thisMonth":
-          matchesDate = eventDate >= monthStart && eventDate <= monthEnd;
-          break;
-        case "customDate":
-          matchesDate =
-            !selectedCustomDate ||
-            eventDate.getTime() === selectedCustomDate.getTime();
-          break;
-        case "customRange":
-          if (
-            selectedRangeStart &&
-            selectedRangeEnd &&
-            selectedRangeStart > selectedRangeEnd
-          ) {
-            matchesDate = false;
-            break;
-          }
-
-          if (selectedRangeStart && eventDate < selectedRangeStart) {
-            matchesDate = false;
-          }
-
-          if (selectedRangeEnd && eventDate > selectedRangeEnd) {
-            matchesDate = false;
-          }
-          break;
-        default:
-          matchesDate = true;
-      }
-
-      return matchesSearch && matchesRegion && matchesCategory && matchesDate;
+      return (
+        matchesSearch &&
+        matchesCountry &&
+        matchesState &&
+        matchesType &&
+        matchesCost &&
+        matchesHashtag &&
+        matchesDateRange
+      );
     });
   }, [
+    events,
     searchTerm,
-    selectedRegion,
-    selectedCategory,
-    dateFilterType,
-    customDate,
+    selectedCountry,
+    selectedState,
+    selectedEventType,
+    selectedCost,
+    selectedHashtag,
     rangeStart,
     rangeEnd,
   ]);
@@ -185,24 +180,29 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onNavigate={setCurrentPage}
       />
+
       <SearchBar
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
-        selectedRegion={selectedRegion}
-        onRegionChange={setSelectedRegion}
-        selectedCategory={selectedCategory}
-        onCategoryChange={setSelectedCategory}
-        dateFilterType={dateFilterType}
-        onDateFilterTypeChange={handleDateFilterTypeChange}
-        customDate={customDate}
-        onCustomDateChange={setCustomDate}
+        selectedCountry={selectedCountry}
+        onCountryChange={setSelectedCountry}
+        selectedState={selectedState}
+        onStateChange={setSelectedState}
+        selectedEventType={selectedEventType}
+        onEventTypeChange={setSelectedEventType}
+        selectedCost={selectedCost}
+        onCostChange={setSelectedCost}
+        selectedHashtag={selectedHashtag}
+        onHashtagChange={setSelectedHashtag}
         rangeStart={rangeStart}
         onRangeStartChange={setRangeStart}
         rangeEnd={rangeEnd}
         onRangeEndChange={setRangeEnd}
-        regions={regions}
-        categories={categories}
+        countries={countries}
+        states={states}
+        hashtags={hashtags}
       />
+
       <main className="main" id="main-content">
         <div
           style={{
@@ -211,16 +211,15 @@ export default function App() {
             alignItems: "center",
             marginBottom: "1.5rem",
             paddingLeft: "0.25rem",
+            gap: "1rem",
+            flexWrap: "wrap",
           }}
         >
           <p
             className="main__results-info"
             style={{ marginBottom: 0, paddingLeft: 0 }}
           >
-            Showing{" "}
-            <span className="main__results-count">
-              {filteredEvents.length}
-            </span>{" "}
+            Showing <span className="main__results-count">{filteredEvents.length}</span>{" "}
             event{filteredEvents.length !== 1 ? "s" : ""}
           </p>
 
@@ -236,46 +235,24 @@ export default function App() {
             }}
           >
             <button
+              type="button"
               onClick={() => setViewMode("list")}
               style={{
                 padding: "0.5rem 1rem",
                 borderRadius: "8px",
                 background:
-                  viewMode === "list"
-                    ? "var(--accent-primary)"
-                    : "transparent",
+                  viewMode === "list" ? "var(--accent-primary)" : "transparent",
                 color: viewMode === "list" ? "#fff" : "var(--text-muted)",
                 border: "none",
                 cursor: "pointer",
                 fontSize: "13px",
                 fontWeight: "bold",
-                transition: "all 0.2s",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
               }}
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="8" y1="6" x2="21" y2="6"></line>
-                <line x1="8" y1="12" x2="21" y2="12"></line>
-                <line x1="8" y1="18" x2="21" y2="18"></line>
-                <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                <line x1="3" y1="18" x2="3.01" y2="18"></line>
-              </svg>
               List
             </button>
             <button
+              type="button"
               onClick={() => setViewMode("map")}
               style={{
                 padding: "0.5rem 1rem",
@@ -287,53 +264,55 @@ export default function App() {
                 cursor: "pointer",
                 fontSize: "13px",
                 fontWeight: "bold",
-                transition: "all 0.2s",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
               }}
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"></polygon>
-                <line x1="9" y1="3" x2="9" y2="21"></line>
-                <line x1="15" y1="3" x2="15" y2="21"></line>
-              </svg>
               Map
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("calendar")}
+              style={{
+                padding: "0.5rem 1rem",
+                borderRadius: "8px",
+                background:
+                  viewMode === "calendar"
+                    ? "var(--accent-primary)"
+                    : "transparent",
+                color: viewMode === "calendar" ? "#fff" : "var(--text-muted)",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "13px",
+                fontWeight: "bold",
+              }}
+            >
+              Calendar
             </button>
           </div>
         </div>
 
+        {viewMode === "list" && <FeaturedEvents events={filteredEvents} />}
+
         {viewMode === "list" ? (
           <div className="events-grid" id="events-grid">
             {filteredEvents.length > 0 ? (
-              filteredEvents.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))
+              filteredEvents.map((event) => <EventCard key={event.id} event={event} />)
             ) : (
               <div className="empty-state" id="empty-state">
                 <div className="empty-state__icon">🔎</div>
                 <h2 className="empty-state__title">No events found</h2>
                 <p className="empty-state__description">
-                  Try adjusting your search terms or filters to find events
-                  near you.
+                  Try adjusting your search terms or filters to find events near you.
                 </p>
               </div>
             )}
           </div>
-        ) : (
+        ) : viewMode === "map" ? (
           <EventMap events={filteredEvents} />
+        ) : (
+          <EventCalendar events={filteredEvents} />
         )}
       </main>
+
       <Footer onNavigate={setCurrentPage} />
     </>
   );
